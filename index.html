@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>合器 · 粒子瓷片</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#080e18;color:#e4edf4;
+font-family:system-ui,-apple-system,sans-serif}
+#scene{position:fixed;inset:0;width:100%;height:100%}
+header{position:fixed;top:max(28px,env(safe-area-inset-top));left:28px;pointer-events:none}
+h1{font:32px serif;letter-spacing:10px;margin:0}
+header p{font-size:10px;letter-spacing:3px;color:#8a9eb5}
+footer{position:fixed;bottom:max(28px,env(safe-area-inset-bottom));left:0;
+width:100%;text-align:center;padding:0 18px}
+#status{font-size:12px;color:#aec2d5;min-height:38px;line-height:1.6}
+button{font:13px system-ui;border:1px solid #577087;border-radius:30px;
+background:#182739;color:#e4edf4;padding:13px 20px;margin:0 4px}
+button:first-of-type{background:#dae7ee;color:#172637}
+button:disabled{opacity:.5}
+#preview{position:fixed;right:18px;top:28px;width:110px;border-radius:10px;
+transform:scaleX(-1);display:none;border:1px solid #456078}
+.label{position:fixed;left:28px;bottom:150px;font-size:11px;
+letter-spacing:2px;color:#7e95ad;pointer-events:none}
+</style>
+
+<canvas id="scene"></canvas>
+<header><h1>合 器</h1><p>TWELVE FRAGMENTS / ONE VESSEL</p></header>
+<div class="label">12 块瓷片 · 万千微粒 · 青花梅瓶</div>
+<video id="preview" autoplay muted playsinline></video>
+<footer>
+<div id="status" role="status">合掌成器，分掌散开。也可以点击按钮体验。</div>
+<button id="camera">开启摄像头</button>
+<button id="demo">合成瓷瓶</button>
+</footer>
+
+<script type="module">
+const $=s=>document.querySelector(s);
+const status=$('#status'),video=$('#preview');
+const cameraButton=$('#camera'),demo=$('#demo');
+
+try{
+const T=await import(
+ 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js'
+);
+const renderer=new T.WebGLRenderer({
+ canvas:$('#scene'),antialias:false,alpha:true,powerPreference:'default'
+});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+renderer.outputColorSpace=T.SRGBColorSpace;
+const scene=new T.Scene();
+const camera=new T.PerspectiveCamera(38,1,.1,100);
+camera.position.set(0,.25,11);
+camera.lookAt(0,0,0);
+const group=new T.Group();scene.add(group);
+
+// 曲线定义梅瓶：圈足、收腹、丰肩、短颈和小口。
+const profile=[
+ [.56,-1.8],[.62,-1.65],[.66,-1.3],[.8,-.8],
+ [1,-.2],[1.12,.4],[1.1,.8],[.94,1.12],
+ [.6,1.4],[.32,1.55],[.32,1.77],[.39,1.82]
+];
+function radius(v){
+ const y=-1.8+v*3.62;
+ for(let i=1;i<profile.length;i++){
+  if(y<=profile[i][1]){
+   const [a,ya]=profile[i-1],[b,yb]=profile[i];
+   return T.MathUtils.lerp(a,b,(y-ya)/(yb-ya));
+  }
+ }
+ return .39;
+}
+
+// 原创青花图案。粒子从同一张纹理采样颜色，合体后花纹连续。
+const canvas=document.createElement('canvas');
+canvas.width=1024;canvas.height=1024;
+const ctx=canvas.getContext('2d');
+ctx.fillStyle='#e0e8e5';ctx.fillRect(0,0,1024,1024);
+ctx.strokeStyle='#245b97';
+for(const y of [28,45,105,125,875,895,968,987]){
+ ctx.lineWidth=y===105||y===895?8:3;
+ ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(1024,y);ctx.stroke();
+}
+for(let j=0;j<3;j++)for(let i=0;i<8;i++){
+ ctx.save();ctx.translate(i*128+(j%2)*64,260+j*220);
+ ctx.lineWidth=4;ctx.strokeStyle='#26568c';
+ ctx.beginPath();ctx.moveTo(-64,55);
+ ctx.bezierCurveTo(-30,-95,40,95,72,-50);ctx.stroke();
+ for(let k=0;k<8;k++){
+  ctx.save();ctx.rotate(k*Math.PI/4);
+  ctx.fillStyle=k%2?'#3972a8':'#22558b';
+  ctx.beginPath();ctx.ellipse(0,22,8,22,0,0,Math.PI*2);ctx.fill();
+  ctx.restore();
+ }
+ ctx.fillStyle='#a0c3d6';
+ ctx.beginPath();ctx.arc(0,0,8,0,Math.PI*2);ctx.fill();
+ for(const x of [-45,45]){
+  ctx.fillStyle='#285d91';
+  ctx.beginPath();ctx.ellipse(x,25*Math.sign(x),7,23,
+   x>0?.7:-.7,0,Math.PI*2);ctx.fill();
+ }
+ ctx.restore();
+}
+const pixels=ctx.getImageData(0,0,1024,1024).data;
+
+// 仅 12 个整体碎片。每块由密集粒子构成，共享一个绘制对象。
+const pieces=[];
+for(let row=0;row<3;row++)for(let col=0;col<4;col++){
+ const angle=(col+.5)*Math.PI/2;
+ const offset=new T.Vector3(
+  Math.cos(angle)*(1.5+Math.random()*.6),
+  (row-1)*.95+(Math.random()-.5)*.6,
+  Math.sin(angle)*(1.5+Math.random()*.6)
+ );
+ const rotation=new T.Quaternion().setFromEuler(new T.Euler(
+  (Math.random()-.5)*.9,(Math.random()-.5)*1.4,(Math.random()-.5)*1.1
+ ));
+ pieces.push({
+  center:new T.Vector3(Math.cos(angle)*.7,-1.8+(row+.5)*3.62/3,
+   Math.sin(angle)*.7),
+  offset,rotation,phase:Math.random()*6.28,
+  current:new T.Quaternion(),translation:new T.Vector3()
+ });
+}
+const count=24000;
+const original=new Float32Array(count*3);
+const positions=new Float32Array(count*3);
+const colors=new Float32Array(count*3);
+const ids=new Uint8Array(count);
+const color=new T.Color();
+
+for(let i=0;i<count;i++){
+ const u=Math.random(),v=Math.random(),a=u*Math.PI*2;
+ // 起伏的分界，让大瓷片边缘呈断裂感，而非规则矩形。
+ const warpedU=(u+.022*Math.sin(v*23)+1)%1;
+ const warpedV=T.MathUtils.clamp(v+.026*Math.sin(a*3),0,.9999);
+ ids[i]=Math.min(2,Math.floor(warpedV*3))*4+
+  Math.min(3,Math.floor(warpedU*4));
+ const r=radius(v)+(Math.random()-.5)*.018;
+ original[i*3]=Math.cos(a)*r;
+ original[i*3+1]=-1.8+v*3.62;
+ original[i*3+2]=Math.sin(a)*r;
+ const px=Math.min(1023,Math.floor(u*1024));
+ const py=Math.min(1023,Math.floor((1-v)*1024));
+ const k=(py*1024+px)*4;
+ color.setRGB(pixels[k]/255,pixels[k+1]/255,pixels[k+2]/255,T.SRGBColorSpace);
+ const shade=.78+.22*(Math.cos(a-.5)*.5+.5);
+ colors[i*3]=color.r*shade;
+ colors[i*3+1]=color.g*shade;
+ colors[i*3+2]=color.b*shade;
+}
+const geometry=new T.BufferGeometry();
+geometry.setAttribute('position',new T.BufferAttribute(positions,3).setUsage(T.DynamicDrawUsage));
+geometry.setAttribute('color',new T.BufferAttribute(colors,3));
+const material=new T.ShaderMaterial({
+ vertexColors:true,
+ uniforms:{size:{value:Math.min(devicePixelRatio,1.5)*3.1}},
+ vertexShader:`
+ attribute vec3 color;
+ varying vec3 c;
+ uniform float size;
+ void main(){
+  c=color;
+  vec4 p=modelViewMatrix*vec4(position,1.);
+  gl_Position=projectionMatrix*p;
+  gl_PointSize=clamp(size*8./max(1.,-p.z),1.,8.);
+ }`,
+ fragmentShader:`
+ varying vec3 c;
+ void main(){
+  float d=length(gl_PointCoord-.5);
+  if(d>.5)discard;
+  gl_FragColor=vec4(c,1.);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+ }`
+});
+const particles=new T.Points(geometry,material);
+particles.frustumCulled=false;
+group.add(particles);
+
+// 暗色展台光环。
+const ring=new T.Mesh(new T.RingGeometry(1.55,1.56,96),
+ new T.MeshBasicMaterial({color:0x304862,side:T.DoubleSide}));
+ring.rotation.x=-Math.PI/2;ring.position.y=-2.2;scene.add(ring);
+
+let target=0,progress=0,mode='manual';
+let stream=null,detector=null,lastVideo=-1,lastDetect=0,lastBoth=0;
+let previous=performance.now(),rotation=0;
+const identity=new T.Quaternion(),point=new T.Vector3();
+
+function resize(){
+ renderer.setSize(innerWidth,innerHeight);
+ camera.aspect=innerWidth/innerHeight;
+ camera.position.z=camera.aspect<.8?14:11;
+ camera.updateProjectionMatrix();
+}
+addEventListener('resize',resize);resize();
+
+demo.onclick=()=>{
+ mode='manual';target=target>.5?0:1;
+ demo.textContent=target?'散开瓷片':'合成瓷瓶';
+ status.textContent=target?'十二片归位，青花成器':'十二块粒子瓷片，缓缓浮游';
+};
+
+function stop(message){
+ if(stream)stream.getTracks().forEach(t=>t.stop());
+ stream=null;video.srcObject=null;video.style.display='none';
+ mode='manual';cameraButton.textContent='开启摄像头';
+ if(message)status.textContent=message;
+}
+cameraButton.onclick=async()=>{
+ if(stream){stop('摄像头已关闭，可以继续点击按钮体验');return;}
+ cameraButton.disabled=true;
+ status.textContent='首次启动需要下载手势模型，请稍候…';
+ try{
+  if(!navigator.mediaDevices?.getUserMedia)
+   throw Error('摄像头需要 HTTPS 或 localhost 环境');
+  if(!detector){
+   const {HandLandmarker,FilesetResolver}=await import(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm');
+   const files=await FilesetResolver.forVisionTasks(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+   detector=await HandLandmarker.createFromOptions(files,{
+    baseOptions:{modelAssetPath:
+     'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},
+    runningMode:'VIDEO',numHands:2,
+    minHandDetectionConfidence:.5,minTrackingConfidence:.5
+   });
+  }
+  stream=await navigator.mediaDevices.getUserMedia({
+   video:{facingMode:'user',width:{ideal:480},height:{ideal:360}},
+   audio:false
+  });
+  video.srcObject=stream;await video.play();
+  video.style.display='block';
+  mode='gesture';lastVideo=-1;lastBoth=performance.now();
+  cameraButton.textContent='关闭摄像头';
+  status.textContent='双手进入画面：掌心相对，缓缓合拢';
+ }catch(e){
+  stop(e.name==='NotAllowedError'
+   ?'未获摄像头权限，仍可点击按钮体验'
+   :'无法启动：'+e.message);
+ }finally{cameraButton.disabled=false;}
+};
+
+function detect(now){
+ if(mode!=='gesture'||!stream||video.readyState<2)return;
+ if(now-lastDetect<100||lastVideo===video.currentTime)return;
+ lastDetect=now;lastVideo=video.currentTime;
+ try{
+  const hands=detector.detectForVideo(video,now).landmarks;
+  if(hands.length!==2){
+   status.textContent='请让双手完整进入摄像头画面';
+   if(now-lastBoth>1600)target=0;
+   return;
+  }
+  lastBoth=now;
+  const aspect=video.videoWidth/video.videoHeight;
+  const dist=(a,b)=>Math.hypot((a.x-b.x)*aspect,a.y-b.y);
+  const center=h=>({
+   x:(h[0].x+h[5].x+h[9].x+h[13].x+h[17].x)/5,
+   y:(h[0].y+h[5].y+h[9].y+h[13].y+h[17].y)/5
+  });
+  const [a,b]=hands;
+  const scale=Math.max(.035,(dist(a[0],a[9])+dist(b[0],b[9]))/2);
+  const gap=Math.max(dist(center(a),center(b)),dist(a[12],b[12])*.7)/scale;
+  // 滞回判断：避免接近临界距离时反复聚散。
+  if(gap<.85)target=1;
+  else if(gap>1.75)target=0;
+  status.textContent=target?'合掌 · 十二片重聚':'分掌 · 粒子瓷片浮游';
+ }catch(e){stop('识别中断，可通过按钮继续体验');}
+}
+
+function frame(now){
+ requestAnimationFrame(frame);
+ const dt=Math.min((now-previous)/1000,.05);previous=now;
+ if(document.hidden)return;
+ detect(now);
+ progress+=(target-progress)*(1-Math.exp(-dt*3.4));
+ const p=T.MathUtils.smoothstep(progress,0,1),spread=1-p,t=now/1000;
+ for(const piece of pieces){
+  piece.current.copy(piece.rotation).slerp(identity,p);
+  piece.translation.copy(piece.offset).multiplyScalar(spread);
+  piece.translation.y+=Math.sin(t*.7+piece.phase)*.12*spread;
+ }
+ for(let i=0;i<count;i++){
+  const k=i*3,piece=pieces[ids[i]];
+  point.fromArray(original,k).sub(piece.center)
+   .applyQuaternion(piece.current).add(piece.center).add(piece.translation);
+  point.toArray(positions,k);
+ }
+ geometry.attributes.position.needsUpdate=true;
+ rotation+=dt*.08;group.rotation.y=rotation;
+ renderer.render(scene,camera);
+}
+requestAnimationFrame(frame);
+addEventListener('pagehide',()=>stop());
+}catch(e){
+ status.textContent='场景加载失败，请检查网络和浏览器：'+e.message;
+ cameraButton.disabled=true;demo.disabled=true;
+}
+</script>
+</html>
